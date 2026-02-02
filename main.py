@@ -46,8 +46,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
 
     # Iteration
-    parser.add_argument("--inner-loops", type=int, default=None,
-                        help="각 outer 반복에서 학습할 에폭 수 (미지정 시 epochs 사용)")
+    parser.add_argument("--inner-loops", type=int, default=None)
 
     # Noise
     parser.add_argument("--label-noise", type=float, default=0.1)
