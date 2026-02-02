@@ -16,12 +16,13 @@ import time
 from src import *
 
 def _now():
-    # CUDA 커널 대기 없이 정확히 재려면 동기화 후 측정
+    """Get precise timestamp (CUDA sync if available)."""
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     return time.perf_counter()
 
 def main():
+    """Main training loop with clustering-guided APPNP."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="Cora")
 
@@ -78,17 +79,15 @@ def main():
     cluster_probs_cache = None
     MIN_EARLY_EPOCH = 100
 
-    # (1) 새 모델/옵티마이저 선언
     model = APPNPNet(dataset.num_node_features, args.hidden, dataset.num_classes, feat_dropout=args.dropout,
              k=args.appnp_k, alpha=args.appnp_alpha, appnp_dropout=args.appnp_dropout).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # (2) 이번 iteration(outer)용 상태 초기화
     best_val_acc = 0
     best_state = None
     patience = 0
 
-    # (3) inner loop 학습
+    # (3) inner loop
     for inner in range(1, args.epochs + 1):
         inner += 1
 
@@ -134,7 +133,7 @@ def main():
                               edge_weight=edge_weight,
                               edge_index_override=data.edge_index)
 
-        # Early stopping (이번 outer에만 적용)
+        # Early stopping
         if args.early_stop > 0:
             improved = val_acc > best_val_acc - 1e-6
             if improved:
@@ -145,7 +144,7 @@ def main():
                 patience += 1
             if (patience >= args.early_stop) and (inner >= MIN_EARLY_EPOCH):
                 print(f"[EarlyStop] epoch={inner}, best_val_acc={best_val_acc:.2f} -> break inner")
-                break  # inner만 종료
+                break
 
         if inner % 10 == 0 or inner == 1:
             print(f"[{inner:03d}] train_loss={loss_tr:.4f} | val_acc={val_acc*100:.2f}% | test_acc={tst_acc*100:.2f}%")
@@ -153,7 +152,6 @@ def main():
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    # 전체 종료 후 최종 성능 (마지막 outer의 active_edge_index = 마지막 학습에 사용된 그래프)
     tr_acc, _ = evaluate(model, data, split="train", edge_index_override=data.edge_index)
     val_acc, _ = evaluate(model, data, split="val", edge_index_override=data.edge_index)
     tst_acc, _ = evaluate(model, data, split="test", edge_index_override=data.edge_index)
