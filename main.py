@@ -116,7 +116,7 @@ def main():
             )
 
             probs_all_aligned = probs_all[:, perm]
-            cluster_labels_cache = cluster_hard.to(data.x.device)  # 하드 라벨은 그대로
+            cluster_labels_cache = cluster_hard.to(data.x.device)
             cluster_probs_cache = probs_all_aligned.to(data.x.device)
 
 
