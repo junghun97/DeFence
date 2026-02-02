@@ -13,19 +13,48 @@ from torch_geometric.utils import to_undirected
 
 
 def maybe_make_masks(data, num_classes: int, train_ratio=0.1, val_ratio=0.1):
-    """Planetoid 등은 기본 마스크가 있지만, 없는 경우(일부 Coauthor/Amazon 등)를 대비해 생성."""
+    """
+    Ensure that `data` has 1D boolean masks: train_mask / val_mask / test_mask.
+
+    Motivation:
+        Some PyG datasets (e.g., Planetoid) already provide split masks,
+        but others may not, or may provide multiple splits in a 2D tensor
+        (e.g., WikiCS provides 20 splits).
+
+    Behavior:
+        - If the masks exist, normalize them into a single 1D mask.
+        - If the masks are 2D, pick the first split (index 0).
+        - If the masks do not exist, this function currently does nothing
+          (despite the docstring suggesting creation).
+
+    Inputs:
+        data: PyG Data object (expects .num_nodes and potentially masks)
+        num_classes: number of classes (not used in current implementation)
+        train_ratio, val_ratio: not used in current implementation (kept for future extension)
+
+    Output:
+        data with possibly modified train/val/test masks.
+    """
     if all(hasattr(data, k) for k in ["train_mask", "val_mask", "test_mask"]):
         N = data.num_nodes
 
         def _pick(mask):
+            """
+            Convert various mask formats to a single 1D boolean mask.
+
+            Supported:
+                - 1D: (N,)
+                - 2D: (N, S) or (S, N) where S is the number of splits
+            Strategy:
+                Use the first split (split index = 0).
+            """
             if mask is None:
                 return None
             if mask.dim() == 1:
                 return mask
-            # 2D: (S, N) or (N, S) 모두 지원 (e.g., WikiCS 20 splits)
             if mask.size(0) == N and mask.size(1) != N:  # (N, S)
                 S = mask.size(1)
-                idx = 0  # 첫 split 사용
+                idx = 0
                 return mask[:, idx]
             elif mask.size(1) == N:  # (S, N)
                 S = mask.size(0)
@@ -41,16 +70,30 @@ def maybe_make_masks(data, num_classes: int, train_ratio=0.1, val_ratio=0.1):
 
 
 def add_edge_noise(data, noise_ratio):
+    """
+    Inject structural noise by adding random edges.
+
+    Definition:
+        Add `noise_ratio * (#existing_edges)` random edges that do not already exist.
+        Then convert the resulting graph into an undirected one.
+
+    Inputs:
+        data: PyG Data object with `edge_index`
+        noise_ratio: fraction of existing edges to add as random edges
+
+    Output:
+        data with updated `edge_index` (undirected) if noise_ratio > 0.
+    """
     num_nodes = data.num_nodes
     num_existing_edges = data.edge_index.size(1)
     num_noisy_edges = int(noise_ratio * num_existing_edges)
 
-    # 기존 edge set으로 중복 방지
+    # Use a set for duplicate checking
     existing = set((int(data.edge_index[0, i]), int(data.edge_index[1, i]))
                    for i in range(num_existing_edges))
 
     noisy_edges = []
-    # 너무 큰 그래프에서 무한루프 방지용 최대 시도 횟수
+    # Prevent infinite loops for very large graphs
     max_trials = max(10 * num_noisy_edges, 10000)
     trials = 0
     while len(noisy_edges) < num_noisy_edges and trials < max_trials:
@@ -67,13 +110,27 @@ def add_edge_noise(data, noise_ratio):
     if noisy_edges:
         noisy_edges = torch.tensor(noisy_edges, dtype=torch.long).t()
         edge_index = torch.cat([data.edge_index, noisy_edges], dim=1)
-        # 일관성 유지를 위해 undirected로 변환
+        # Convert to undirected for consistency
         data.edge_index = to_undirected(edge_index)
 
     return data
 
 
 def _infer_num_classes(data, dataset):
+    """
+    Infer the number of classes.
+
+    Priority:
+        1) dataset.num_classes (if available and valid)
+        2) max label in data.y + 1 (fallback)
+
+    Inputs:
+        data: PyG Data object with `y`
+        dataset: PyG dataset object (may have num_classes)
+
+    Output:
+        int number of classes
+    """
     if hasattr(dataset, "num_classes"):
         try:
             nc = int(dataset.num_classes)
@@ -85,22 +142,31 @@ def _infer_num_classes(data, dataset):
     return int(data.y.max().item() + 1)
 
 
-def _parse_twitch_region(dataset_name_lower: str):
-    """
-    'twitch-de', 'twitch_de', 'twitch:DE', 'twitchDE' 등에서 지역 코드 추출.
-    허용: DE, EN, ES, FR, PT, RU
-    """
-    m = re.match(r"twitch[-_: ]?([a-z]{2})$", dataset_name_lower)
-    if m:
-        return m.group(1).upper()
-    # camelCase 'twitchDE' 형태
-    m2 = re.match(r"twitch([A-Z]{2})$", dataset_name_lower, flags=0)
-    if m2:
-        return m2.group(1).upper()
-    return None
-
-
 def load_noisy_data(dataset_name="Cora", label_noise=0.0, edge_noise=0.0):
+    """
+    Load a node classification dataset and optionally inject label/edge noise.
+
+    Current supported datasets:
+        - 'Cora', 'Citeseer', 'PubMed' (Planetoid)
+
+    Label noise injection:
+        - Only applied to the TRAIN split.
+        - A fraction `label_noise` of train nodes are relabeled uniformly at random
+          among classes excluding the true label.
+
+    Edge noise injection:
+        - Adds random edges via `add_edge_noise`.
+
+    Inputs:
+        dataset_name: dataset identifier (string)
+        label_noise: fraction of training nodes to corrupt (0.0 to 1.0)
+        edge_noise: fraction of edges to add as random edges (0.0 to ...)
+
+    Outputs:
+        dataset: PyG Dataset object
+        data: PyG Data object (possibly modified)
+    """
+    
     name_raw = dataset_name
     name = dataset_name.strip().lower()
     transform = NormalizeFeatures()
@@ -115,8 +181,6 @@ def load_noisy_data(dataset_name="Cora", label_noise=0.0, edge_noise=0.0):
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
     data = dataset[0]
-
-    # 마스크 정규화/생성 (없으면 생성)
     data = maybe_make_masks(data, num_classes=_infer_num_classes(data, dataset))
 
     # Inject label noise only in train set
@@ -142,14 +206,28 @@ def load_noisy_data(dataset_name="Cora", label_noise=0.0, edge_noise=0.0):
 
 def drop_edge_random(data, drop_ratio: float, seed: int, min_keep: int = 1):
     """
-    Randomly drop nodes by ratio and remove all incident edges.
-    Reindexes node IDs and filters node/edge attributes accordingly.
+    Randomly DROP nodes (not edges), then remove all incident edges.
+    Reindex remaining nodes to a compact range [0, keep_N-1].
 
-    Args:
-        data: PyG Data object (expects .edge_index [2, E], and optionally x, y, *_mask).
-        drop_ratio: fraction of N nodes to drop (0.0 <= r < 1.0).
-        seed: int random seed for reproducibility.
-        min_keep: minimum number of nodes to keep.
+    Important:
+        Despite the function name, it performs node dropping, not edge dropping.
+
+    Steps:
+        1) Determine N (#nodes).
+        2) Sample `keep_N = round((1-drop_ratio)*N)` nodes to keep.
+        3) Build an old->new node ID mapping.
+        4) Filter edges to those whose endpoints are both kept, then reindex.
+        5) Slice node-level tensors (x, y, train/val/test masks).
+        6) Update data.num_nodes.
+
+    Inputs:
+        data: PyG Data object (expects edge_index; optionally x, y, masks, edge_weight/edge_attr)
+        drop_ratio: fraction of nodes to drop (0.0 <= r < 1.0)
+        seed: random seed (deterministic selection of kept nodes)
+        min_keep: minimum number of nodes to keep
+
+    Output:
+        Modified data with fewer nodes and reindexed edges.
     """
 
     # ---- figure out N (number of nodes) ----
