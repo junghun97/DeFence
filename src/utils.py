@@ -1,3 +1,7 @@
+"""
+DeFence: Decoupled Feature Anchors for Robust Node Classification under Joint Label-Structure Noise
+"""
+
 import numpy as np
 from sklearn.cluster import KMeans
 
@@ -7,6 +11,7 @@ from torch import nn
 
 
 def get_hidden(model: nn.Module, data) -> torch.Tensor:
+    """Return hidden features h = ReLU(lin1(x)) for all nodes (N, D)."""
     model.eval()
     x, ei = data.x, data.edge_index
 
@@ -14,15 +19,12 @@ def get_hidden(model: nn.Module, data) -> torch.Tensor:
     return h.detach().cpu()  # (N, D)
 
 def _hungarian_perm_from_confusion(conf_mat: np.ndarray) -> np.ndarray:
-    """conf_mat[cluster, class]를 최대화하는 클러스터→클래스 순열을 반환."""
+    """Compute cluster->class permutation that maximizes conf_mat[cluster, class]."""
     try:
         from scipy.optimize import linear_sum_assignment
-        # 최대화 -> 비용을 음수로
         row_ind, col_ind = linear_sum_assignment(-conf_mat)
-        # row_ind는 [0..C-1]이 보장(모든 클러스터가 한 번씩), col_ind가 대응 클래스
         return col_ind
     except Exception:
-        # scipy 없으면 간단 그리디 백업
         C = conf_mat.shape[0]
         used_cls = set()
         perm = np.zeros(C, dtype=np.int64)
@@ -41,9 +43,10 @@ def compute_cluster_to_class_perm_by_train(
     num_classes: int
 ) -> torch.Tensor:
     """
-    train 구간의 (클러스터, 클래스) 혼동행렬로 클러스터→클래스 매칭 순열 반환.
-    반환: shape (C,), dtype long.  i번째 값은 '클러스터 i가 대응하는 클래스 인덱스'.
+    Build a (cluster, class) count matrix on training nodes and return the
+    cluster->class permutation (length C), where perm[c] is the matched class.
     """
+
     device = cluster_hard.device
     m = train_mask.bool().to(device)
     ch = cluster_hard[m]
@@ -52,7 +55,6 @@ def compute_cluster_to_class_perm_by_train(
     C = int(num_classes)
     conf = torch.zeros(C, C, dtype=torch.long, device=device)
     if ch.numel() > 0:
-        # 혼동행렬 집계
         for ci, yi in zip(ch.tolist(), yt.tolist()):
             if 0 <= ci < C and 0 <= yi < C:
                 conf[ci, yi] += 1
@@ -63,6 +65,7 @@ def compute_cluster_to_class_perm_by_train(
     return perm
 
 def _flatten_grads(grads, params):
+    """Flatten a list of gradients into a single 1D vector (None -> zeros)."""
     vecs = []
     for g, p in zip(grads, params):
         if g is None:
@@ -72,18 +75,28 @@ def _flatten_grads(grads, params):
     return torch.cat(vecs, dim=0)
 
 def _pick_params_for_alignment(model, k_last_tensors: int = 2):
-    # 비용을 낮추기 위해 마지막 파라미터 텐서 1~2개만 사용 (보통 최종 분류기 가중치/바이어스)
+    """
+    Pick the last k parameter tensors for alignment (cheap approximation).
+    Typically captures the final classifier weight/bias.
+    """
     params = [p for p in model.parameters() if p.requires_grad]
     k = min(k_last_tensors, len(params))
     return params[-k:]
 
 def _map_scores_to_weights(scores: torch.Tensor, idxes: torch.Tensor, N: int,
                            lo: float = 0.5, hi: float = 1.0) -> torch.Tensor:
+    
+    """
+    Map per-item scores to weights in [lo, hi] for the indices in `idxes`.
+    - Default weight is `lo` for all N items.
+    - Negative scores are clamped to 0.
+    - Scores are normalized by max score, then linearly scaled to [lo, hi].
+    """                           
     w = torch.full((N,), lo, device=scores.device, dtype=scores.dtype)
     if idxes.numel() == 0:
         return w
     s = scores.clone()
-    s = torch.relu(s)  # 음수 정렬은 0 처리
+    s = torch.relu(s)
     smax = s.max()
     if float(smax) == 0.0:
         w[idxes] = lo
