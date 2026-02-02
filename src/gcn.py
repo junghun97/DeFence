@@ -34,7 +34,7 @@ class APPNPNet(nn.Module):
         self.lin1 = Linear(in_dim, hid_dim)
         self.lin2 = Linear(hid_dim, out_dim)
         self.feat_dropout = feat_dropout
-        self.prop = APPNP(K=k, alpha=alpha, dropout=appnp_dropout, cached=False)  # cached=False (edge가 변함)
+        self.prop = APPNP(K=k, alpha=alpha, dropout=appnp_dropout, cached=False)
 
     def forward(self, x, edge_index, edge_weight=None):
         """
