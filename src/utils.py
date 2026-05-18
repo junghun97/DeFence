@@ -1,7 +1,3 @@
-"""
-DeFence: Decoupled Feature Anchors for Robust Node Classification under Joint Label-Structure Noise
-"""
-
 import numpy as np
 from sklearn.cluster import KMeans
 
