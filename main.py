@@ -1,5 +1,5 @@
 """
-DeFence: Decoupled Feature Anchors for Robust Node Classification under Joint Label-Structure Noise
+DeFence: Robust Node Classification under Joint Label-Structure Noise
 """
 
 import argparse
