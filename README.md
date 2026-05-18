@@ -1,6 +1,6 @@
-# DeFence: Decoupled Feature Anchors for Robust Node Classification under Joint Label-Structure Noise
+# DeFence: Robust Node Classification under Joint Label-Structure Noise
 
-This is the official implementation of **DeFence** (*DEcoupled FEature aNChors for robust nodE classification*), submitted to KDD 2026.
+This is the official implementation of **DeFence** (*DEcoupled FEature aNChors for robust nodE classification*), submitted to CIKM 2026.
 
 ---
 ## Abstract
